@@ -1,0 +1,49 @@
+---
+- hosts: all
+  gather_facts: no
+  vars:
+    SWI: "EOS.swi"
+    SWIX: "EOS-NDRSensor.swix"
+
+  tasks:
+
+    - name: upload SWI
+      ansible.netcommon.net_put:
+        src: "FILES/{{ SWI }}"
+        dest: "/mnt/flash/{{ SWI }}"
+
+    - name: upload SWIX
+      ansible.netcommon.net_put:
+        src: "FILES/{{ SWIX }}"
+        dest: "/mnt/flash/{{ SWIX }}"
+
+    - name: set system boot and copy ndr extension
+      arista.eos.eos_command:
+        commands:
+          - "enable"
+          - "configure"
+          - "boot system flash:{{ SWI }}"
+          - "copy flash:{{ SWIX }} extension:"
+          - "write"
+
+    - name: switch reload
+      arista.eos.eos_command:
+        commands:
+          - "enable"
+          - "reload now"
+
+    - name: Reset the connection
+      meta: reset_connection
+
+    - name: Wait for switch to come back up
+      wait_for_connection:
+        timeout: 1200
+
+    - name: activate ndr extension
+      arista.eos.eos_command:
+        commands:
+          - "enable"
+          - "configure"
+          - "extension {{ SWIX }}"
+          - "copy installed-extensions boot-extensions"
+          - "write"

@@ -1,0 +1,72 @@
+---
+- hosts: all
+  gather_facts: no
+  vars:
+    NUCLEUS_CERT: "nucleus.pem"
+    NUCLEUS_IP: "1.2.3.4"
+
+  tasks:
+
+    - name: get switch hostname
+      eos_command:
+        commands:
+          - show hostname | json 
+      register: output
+
+    - name: upload nucleus cert
+      ansible.netcommon.net_put:
+        src: "FILES/{{ NUCLEUS_CERT }}"
+        dest: "/mnt/flash/{{ NUCLEUS_CERT }}"
+
+    - name: copy nucleus cert to switch cert store
+      arista.eos.eos_command:
+        commands:
+          - "enable"
+          - "copy flash:{{ NUCLEUS_CERT }} certificate:"
+
+    - name: generate switch ndr keys and self-signed cert
+      arista.eos.eos_command:
+        commands:
+          - "enable"
+          - "security pki key generate rsa 2048 {{ output['stdout'][0]['hostname'] }}_ndr_key"
+          - "security pki certificate generate self-signed {{ output['stdout'][0]['hostname'] }}_ndr_cert key {{ output['stdout'][0]['hostname'] }}_ndr_key generate rsa 2048 parameters common-name {{ output['stdout'][0]['hostname'] }} country ES state ES locality MADRID organization ORG organization-unit NETWORKING"
+          - "copy certificate:{{ output['stdout'][0]['hostname'] }}_ndr_cert flash:{{ output['stdout'][0]['hostname'] }}_ndr_cert"
+
+    - name: download switch self-signed cert
+      ansible.netcommon.net_get:
+        src: "/mnt/flash/{{ output['stdout'][0]['hostname'] }}_ndr_cert"
+        dest: "DOWNLOADS/{{ output['stdout'][0]['hostname'] }}_ndr_cert"
+
+    - name: create switch ndr ssl profile
+      arista.eos.eos_command:
+        commands:
+          - "enable"
+          - "configure"
+          - "management security"
+          - "ssl profile ndr_ssl_profile"
+          - "certificate {{ output['stdout'][0]['hostname'] }}_ndr_cert key {{ output['stdout'][0]['hostname'] }}_ndr_key"
+          - "trust certificate nucleus.pem"
+          - "write"
+
+    - name: get nucleus ip route
+      eos_command:
+        commands:
+          - "show ip route {{ NUCLEUS_IP }} | json"
+      register: NUCLEUS_INTERFACE
+
+    - name: configure switch monitor security awake
+      vars:
+        INTERFACE: "{{ NUCLEUS_INTERFACE['stdout'][0]['vrfs']['default']['routes']['0.0.0.0/0']['vias'][0]['interface'] }}"
+      arista.eos.eos_command:
+        commands:
+          - "enable"
+          - "configure"
+          - "monitor security awake"
+          - "monitor-point identifier {{ MPID }}"
+          - "nucleus awake-nucleus"
+          - "local interface {{ INTERFACE }}"
+          - "destination {{ NUCLEUS_IP }}"
+          - "ssl profile ndr_ssl_profile"
+          - "exit"
+          - "no disabled"
+          - "write"
